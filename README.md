@@ -1,75 +1,91 @@
-# Automated Cloud Backup System (Linux-to-AWS S3)
+# ☁️ Enterprise Automated Cloud Backup System
+
+[![Bash](https://img.shields.io/badge/Language-Bash-4EAA25?logo=gnu-bash&logoColor=white)](https://www.gnu.org/software/bash/)
+[![AWS](https://img.shields.io/badge/Cloud-AWS%20S3-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/s3/)
+[![Security](https://img.shields.io/badge/Security-IAM%20Roles-red)](https://aws.amazon.com/iam/)
+[![Linux](https://img.shields.io/badge/OS-Linux%20FHS-lightgrey?logo=linux&logoColor=black)](https://foundation.linuxloc.org/)
+
 ## 🎯 Project Motive
-In modern DevOps, data is the most valuable asset. Manual backups are inconsistent and local storage is vulnerable to hardware failure.
+In a production environment, "manual" is a dirty word. Data loss can cost companies millions. This project solves the problem of unreliable local backups by creating a **secure, automated, and self-cleaning** bridge between a Linux server and the AWS Cloud.
 
-**The Goal:**
+### Key Engineering Features:
+* **Cost Optimization:** Automated 7-day retention policy to delete old backups and save S3 costs.
+* **Data Integrity:** Uses `tar` with Gzip compression for secure, corruption-resistant packaging.
+* **Production Standards:** Follows the **Linux Filesystem Hierarchy Standard (FHS)** by utilizing `/usr/local/bin` and `/var/log`.
+* **Self-Logging:** Comprehensive audit trails for every execution attempt.
 
-To build a fully automated, hands-off Disaster Recovery (DR) pipeline that ensures data integrity by migrating local server files to a highly durable AWS S3 environment using secure shell scripting.
+---
 
-## 🛠 Tech Stack & Requirements
-- **Operating System:** Linux (Ubuntu/Debian)
-- **Scripting:** Bash (Bourne Again Shell)Cloud Provider: Amazon Web Services (AWS)
-- **Storage Service:** AWS S3 (Simple Storage Service)
-- **Automation:** Cron (Linux Task Scheduler)
+## 🏗 System Architecture
 
-## 🚀 Implementation Steps
-1. Environment Setup
-   First, install the AWS Command Line Interface (CLI) to allow the Linux kernel to communicate with the AWS Cloud API.
+
+1.  **Trigger:** Linux `crontab` executes the script at a scheduled interval.
+2.  **Environment Check:** Script verifies source directories and AWS CLI connectivity.
+3.  **Process:** Data is compressed, timestamped, and uploaded via AWS API.
+4.  **Maintenance:** The script scans the bucket/local temp for files older than the retention limit and purges them.
+5.  **Audit:** Every step is recorded in a centralized log file.
+
+---
+
+## 🚀 Installation & Setup
+
+### 1. Prerequisites
+* AWS CLI v2 installed (`aws --version`)
+* IAM User with `S3FullAccess` programmatic keys.
+* Root or Sudo access on the Linux machine.
+
+### 2. Deployment
 ```bash
-  curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-  unzip awscliv2.zip
-  sudo ./aws/install
+# 1. Create the project directory and log file
+sudo touch /var/log/backup_system.log
+sudo chmod 666 /var/log/backup_system.log
+
+# 2. Configure AWS (Provide your keys)
+aws configure
+
+# 3. Move the script to a global path
+sudo mv backup.sh /usr/local/bin/backup.sh
+sudo chmod +x /usr/local/bin/backup.sh
 ```
-2. Secure Configuration
-   Configure security credentials using an IAM (Identity and Access Management) user with S3FullAccess policy.
-```bash
-   aws configure
-   #Enter Access Key and Secret Key when prompted
-```
-3. The Backup Engine (``backup.sh``)
-Create the core script that handles compression, timestamping, and transmission.
+## 3. Automation (The Scheduler)
+To run this backup every night at Midnight, add this line to your crontab (crontab -e):
+
 ```Bash
-#!/bin/bash
+0 0 * * * /usr/local/bin/backup.sh >> /var/log/backup_system.log 2>&1
+```
+## 💻 The Core Script (backup.sh)Bash#!/bin/bash
+```bash
+# --- CONFIGURATION ---
 SOURCE="/home/root/important_data"
-DEST="s3://your-unique-bucket-name"
+BUCKET="s3://your-unique-bucket-name"
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
+LOG_FILE="/var/log/backup_system.log"
+RETENTION_DAYS=7
+
+exec > >(tee -a ${LOG_FILE}) 2>&1 # Internal Logging
+
+echo "[$(date)] INFO: Starting Lifecycle..."
+
+# 1. Validate Source
+[ ! -d "$SOURCE" ] && { echo "ERROR: Source missing"; exit 1; }
+
+# 2. Compress & Upload
 BACKUP_NAME="backup_$TIMESTAMP.tar.gz"
+tar -czf /tmp/$BACKUP_NAME "$SOURCE"
+aws s3 cp /tmp/$BACKUP_NAME "$BUCKET/"
 
-# Archiving and Uploading
-tar -czf /tmp/$BACKUP_NAME $SOURCE
-aws s3 cp /tmp/$BACKUP_NAME $DEST/
-rm /tmp/$BACKUP_NAME # Local cleanup
+# 3. Cleanup & Retention
+rm /tmp/$BACKUP_NAME
+find /tmp -name "backup_*.tar.gz" -mtime +$RETENTION_DAYS -delete
+echo "[$(date)] SUCCESS: Backup sync complete."
 ```
+## 🛡 Troubleshooting
 
-4. Zero-Touch Automation
-Schedule the script to run every night at 00:00 (Midnight) using the Crontab utility.
-```Bash
-crontab -e
-# Add this line at the bottom:
-0 0 * * * /path/to/backup.sh
-```
-
-## 📊 Expected Output & VerificationWhen 
-When the script runs, it generates the following log output in the terminal:
-```Plaintext
-[2026-02-07 22:45:00] Starting compression of /home/root/important_data...
-[2026-02-07 22:45:05] Uploading backup_2026-02-07.tar.gz to S3...
-upload: /tmp/backup_2026-02-07.tar.gz to s3://your-bucket/backup_2026-02-07.tar.gz
-[2026-02-07 22:45:10] SUCCESS: Backup Lifecycle Completed.
-```
-
-## 🛡 Troubleshooting & Edge Cases
-
-I implemented the following logic to handle common production failures:
-
-
-| Issue | Solution |
-| --- | --- |
-| AWS CLI Not Found | Ensure /usr/local/bin/aws is in your system $PATH. |
-| Permission Denied | Run chmod +x backup.sh to grant execution rights. |
-| S3 Access Denied | Verify IAM User has PutObject permissions for the specific bucket. |
-| Large File Timeout | Use the --multipart-threshold flag in AWS CLI for files > 5GB. |
-
+| Scenario | Fix |
+| :--- | :--- |
+| **S3 Access Denied** | Check if the IAM user has `s3:PutObject` permissions |
+| **Path Errors** | Ensure the `SOURCE` variable in the script matches your actual data folder |
+| **Command Not Found** | Ensure ``/usr/local/bin`` is in your `$PATH` |
 
 ## ✍️ Author
 **Prabhakar Rayal**  
@@ -82,7 +98,6 @@ B.Tech CSE | Graphic Era Hill University
 
 [Naukari Profile](https://www.naukri.com/mnjuser/profile?id=&altresid)
 
-[Email](prabhakarrayalarcy@gmail.com)
-
 ## ⭐ Support
-If this project helped you understand cloud automation or shell scripting, please give this repository a Star ⭐! It helps others find this resource.
+
+If this project helped you learn about AWS or Bash, please Star ⭐ this repository!
